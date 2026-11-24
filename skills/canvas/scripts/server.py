@@ -11,107 +11,35 @@ import threading
 import time
 import webbrowser
 
-HTML_PAGE = """<!DOCTYPE html>
-<html>
-<head>
-  <title>Agent Drawing Canvas</title>
-  <style>
-    body { margin: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; background: #1e1e1e; color: #fff; font-family: sans-serif; }
-    canvas { background: #ffffff; border-radius: 6px; cursor: crosshair; box-shadow: 0 4px 20px rgba(0,0,0,0.5); }
-    .toolbar { margin-top: 12px; display: flex; gap: 10px; align-items: center; }
-    button { padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; }
-    #done { background: #22c55e; color: white; }
-    #clear { background: #ef4444; color: white; }
-    input[type="color"] { border: none; width: 36px; height: 36px; cursor: pointer; background: none; }
-  </style>
-</head>
-<body>
-  <h3 id="prompt" style="margin:0 0 12px;font-weight:normal"></h3>
-  <canvas id="pad" width="800" height="500" style="touch-action:none"></canvas>
-  <div class="toolbar">
-    <input type="color" id="color" value="#000000" title="Brush Color">
-    <input type="range" id="size" min="1" max="20" value="4" title="Brush Size">
-    <button id="eraser" style="background:#555;color:white">Eraser</button>
-    <button id="undo" style="background:#555;color:white">Undo</button>
-    <button id="clear">Clear</button>
-    <button id="cancel" style="background:#555;color:white">Cancel</button>
-    <button id="done">Done & Send to Agent</button>
-  </div>
-  <script>
-    const canvas = document.getElementById('pad');
-    const ctx = canvas.getContext('2d');
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    document.getElementById('prompt').textContent = __PROMPT__;
-
-    let drawing = false, erasing = false;
-    const history = [];
-    const snapshot = () => { history.push(ctx.getImageData(0, 0, canvas.width, canvas.height)); if (history.length > 50) history.shift(); };
-    canvas.onpointerdown = (e) => { snapshot(); drawing = true; canvas.setPointerCapture(e.pointerId); ctx.beginPath(); ctx.moveTo(e.offsetX, e.offsetY); };
-    canvas.onpointermove = (e) => {
-      if (!drawing) return;
-      ctx.strokeStyle = erasing ? '#ffffff' : document.getElementById('color').value;
-      ctx.lineWidth = erasing ? document.getElementById('size').value * 4 : document.getElementById('size').value;
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-      ctx.lineTo(e.offsetX, e.offsetY);
-      ctx.stroke();
-    };
-    canvas.onpointerup = canvas.onpointercancel = () => { drawing = false; };
-
-    const undo = () => { if (history.length) ctx.putImageData(history.pop(), 0, 0); };
-    document.getElementById('undo').onclick = undo;
-    window.onkeydown = (e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'z') { e.preventDefault(); undo(); } };
-    const eraserBtn = document.getElementById('eraser');
-    eraserBtn.onclick = () => { erasing = !erasing; eraserBtn.style.background = erasing ? '#3b82f6' : '#555'; };
-
-    document.getElementById('clear').onclick = () => {
-      snapshot();
-      ctx.fillStyle = "#ffffff";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-    };
-
-    document.getElementById('cancel').onclick = async () => {
-      await fetch('/cancel', { method: 'POST' });
-      document.body.innerHTML = "<h2>Cancelled. You can close this tab.</h2>";
-      window.close();
-    };
-
-    async function submitAndClose() {
-      const dataUrl = canvas.toDataURL('image/png');
-      await fetch('/save', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image: dataUrl })
-      });
-      document.body.innerHTML = "<h2>Saved! You can close this tab.</h2>";
-      window.close();
-    }
-
-    document.getElementById('done').onclick = submitAndClose;
-  </script>
-</body>
-</html>
-"""
+# Static page files; resolved from this script so it works from any cwd.
+WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "assets", "web")
 
 saved_path = None
 prompt_text = ""
 shutdown_event = threading.Event()
 
 
-class Handler(http.server.BaseHTTPRequestHandler):
+class Handler(http.server.SimpleHTTPRequestHandler):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, directory=WEB_DIR, **kwargs)
 
     def log_message(self, format, *args):
         pass  # Keep stdout clean for the agent
 
+    def list_directory(self, path):
+        self.send_error(404)  # No directory listings
+
     def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-type", "text/html")
-        self.end_headers()
-        # json.dumps gives a safe JS string literal; escape '<' so it can't close the <script>.
-        page = HTML_PAGE.replace("__PROMPT__", json.dumps(prompt_text).replace("<", "\\u003c"))
-        self.wfile.write(page.encode("utf-8"))
+        if self.path == "/prompt":
+            body = json.dumps(prompt_text).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        else:
+            super().do_GET()
 
     def do_POST(self):
         global saved_path
