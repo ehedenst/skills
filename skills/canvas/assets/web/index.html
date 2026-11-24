@@ -1,35 +1,60 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Agent Drawing Canvas</title>
   <link rel="icon" href="data:,">
   <style>
-    body { margin: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; background: #1e1e1e; color: #fff; font-family: sans-serif; }
-    canvas { background: #ffffff; border-radius: 6px; cursor: crosshair; box-shadow: 0 4px 20px rgba(0,0,0,0.5); }
-    .toolbar { margin-top: 12px; display: flex; gap: 10px; align-items: center; }
-    button { padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; }
+    :root { color-scheme: dark; }
+    html, body { margin: 0; height: 100%; overflow: hidden; }
+    body { display: flex; align-items: center; justify-content: center; background: #1e1e1e; color: #fff; font-family: sans-serif; }
+    /* No CSS size: 1 canvas pixel = 1 CSS pixel, so pointer offsets map directly. */
+    canvas { position: fixed; top: 0; left: 0; display: block; cursor: crosshair; touch-action: none; }
+    .overlay { position: fixed; left: 0; right: 0; margin-inline: auto; width: fit-content; max-width: calc(100% - 24px); box-sizing: border-box; border-radius: 8px; background: rgb(30 30 30 / 0.85); box-shadow: 0 2px 12px rgb(0 0 0 / 0.4); }
+    h1 { top: 12px; margin-block: 0; padding: 6px 14px; font-size: 1.2rem; font-weight: normal; }
+    h1:empty { display: none; }
+    .toolbar { bottom: 12px; display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; align-items: center; padding: 8px 12px; }
+    button { padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; background: #555; color: white; }
+    button[aria-pressed="true"] { background: #3b82f6; }
     #done { background: #22c55e; color: white; }
     #clear { background: #ef4444; color: white; }
     input[type="color"] { border: none; width: 36px; height: 36px; cursor: pointer; background: none; }
   </style>
 </head>
 <body>
-  <h3 id="prompt" style="margin:0 0 12px;font-weight:normal"></h3>
-  <canvas id="pad" width="800" height="500" style="touch-action:none"></canvas>
-  <div class="toolbar">
-    <input type="color" id="color" value="#000000" title="Brush Color">
-    <input type="range" id="size" min="1" max="20" value="4" title="Brush Size">
-    <button id="eraser" style="background:#555;color:white">Eraser</button>
-    <button id="undo" style="background:#555;color:white">Undo</button>
+  <canvas id="pad" role="img" aria-label="Drawing area"></canvas>
+  <h1 id="prompt" class="overlay"></h1>
+  <div class="toolbar overlay">
+    <label for="color">Color</label>
+    <input type="color" id="color" value="#000000">
+    <label for="size">Size</label>
+    <input type="range" id="size" min="1" max="20" value="4">
+    <button id="eraser" aria-pressed="false">Eraser</button>
+    <button id="undo">Undo</button>
     <button id="clear">Clear</button>
-    <button id="cancel" style="background:#555;color:white">Cancel</button>
+    <button id="cancel">Cancel</button>
     <button id="done">Done & Send to Agent</button>
   </div>
   <script>
     const canvas = document.getElementById('pad');
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    const MARGIN = 20;
+
+    // Grow the canvas to cover the window, keeping what's drawn. Never shrink, so a smaller window can't cut the drawing.
+    function fit() {
+      const w = Math.max(canvas.width, innerWidth), h = Math.max(canvas.height, innerHeight);
+      if (w === canvas.width && h === canvas.height) return;
+      const old = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      canvas.width = w; canvas.height = h;  // resizing clears the canvas
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, w, h);
+      ctx.putImageData(old, 0, 0);
+    }
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
+    fit();
+    window.onresize = fit;
 
     fetch('/prompt').then(r => r.json()).then(p => { document.getElementById('prompt').textContent = p; });
 
@@ -48,11 +73,17 @@
     };
     canvas.onpointerup = canvas.onpointercancel = () => { drawing = false; };
 
-    const undo = () => { if (history.length) ctx.putImageData(history.pop(), 0, 0); };
+    // Fill first: a snapshot taken before a resize is smaller than the canvas.
+    const undo = () => {
+      if (!history.length) return;
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.putImageData(history.pop(), 0, 0);
+    };
     document.getElementById('undo').onclick = undo;
     window.onkeydown = (e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'z') { e.preventDefault(); undo(); } };
     const eraserBtn = document.getElementById('eraser');
-    eraserBtn.onclick = () => { erasing = !erasing; eraserBtn.style.background = erasing ? '#3b82f6' : '#555'; };
+    eraserBtn.onclick = () => { erasing = !erasing; eraserBtn.setAttribute('aria-pressed', erasing); };
 
     document.getElementById('clear').onclick = () => {
       snapshot();
@@ -66,8 +97,36 @@
       window.close();
     };
 
+    // Crop to the bounding box of everything that isn't white, plus MARGIN on every side.
+    // Scans pixels rather than tracking strokes, so eraser, undo and clear are all accounted for.
+    function cropped() {
+      const w = canvas.width, h = canvas.height;
+      const px = new Uint32Array(ctx.getImageData(0, 0, w, h).data.buffer);
+      let x0 = w, y0 = h, x1 = -1, y1 = -1;
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          if (px[y * w + x] !== 0xffffffff) {  // canvas is opaque, so white is the only all-255 pixel
+            if (x < x0) x0 = x;
+            if (x > x1) x1 = x;
+            if (y < y0) y0 = y;
+            if (y > y1) y1 = y;
+          }
+        }
+      }
+      if (x1 < 0) return canvas;  // nothing drawn: send the blank canvas as is
+      const cw = x1 - x0 + 1, ch = y1 - y0 + 1;
+      const out = document.createElement('canvas');
+      out.width = cw + 2 * MARGIN;
+      out.height = ch + 2 * MARGIN;
+      const o = out.getContext('2d');
+      o.fillStyle = "#ffffff";
+      o.fillRect(0, 0, out.width, out.height);
+      o.drawImage(canvas, x0, y0, cw, ch, MARGIN, MARGIN, cw, ch);
+      return out;
+    }
+
     async function submitAndClose() {
-      const dataUrl = canvas.toDataURL('image/png');
+      const dataUrl = cropped().toDataURL('image/png');
       await fetch('/save', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
