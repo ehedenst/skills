@@ -3,140 +3,69 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="light dark">
   <title>Agent Drawing Canvas</title>
   <link rel="icon" href="data:,">
-  <style>
-    :root { color-scheme: dark; }
-    html, body { margin: 0; height: 100%; overflow: hidden; }
-    body { display: flex; align-items: center; justify-content: center; background: #1e1e1e; color: #fff; font-family: sans-serif; }
-    /* No CSS size: 1 canvas pixel = 1 CSS pixel, so pointer offsets map directly. */
-    canvas { position: fixed; top: 0; left: 0; display: block; cursor: crosshair; touch-action: none; }
-    .overlay { position: fixed; left: 0; right: 0; margin-inline: auto; width: fit-content; max-width: calc(100% - 24px); box-sizing: border-box; border-radius: 8px; background: rgb(30 30 30 / 0.85); box-shadow: 0 2px 12px rgb(0 0 0 / 0.4); }
-    h1 { top: 12px; margin-block: 0; padding: 6px 14px; font-size: 1.2rem; font-weight: normal; }
-    h1:empty { display: none; }
-    .toolbar { bottom: 12px; display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; align-items: center; padding: 8px 12px; }
-    button { padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; background: #555; color: white; }
-    button[aria-pressed="true"] { background: #3b82f6; }
-    #done { background: #22c55e; color: white; }
-    #clear { background: #ef4444; color: white; }
-    input[type="color"] { border: none; width: 36px; height: 36px; cursor: pointer; background: none; }
-  </style>
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
 </head>
 <body>
-  <canvas id="pad" role="img" aria-label="Drawing area"></canvas>
-  <h1 id="prompt" class="overlay"></h1>
-  <div class="toolbar overlay">
-    <label for="color">Color</label>
-    <input type="color" id="color" value="#000000">
-    <label for="size">Size</label>
-    <input type="range" id="size" min="1" max="20" value="4">
-    <button id="eraser" aria-pressed="false">Eraser</button>
-    <button id="undo">Undo</button>
-    <button id="clear">Clear</button>
-    <button id="cancel">Cancel</button>
-    <button id="done">Done & Send to Agent</button>
+  <canvas id="pad" data-tool="pen" role="img" aria-label="Drawing area"></canvas>
+  <div id="eraser-cursor" class="eraser-cursor" aria-hidden="true" hidden></div>
+
+  <h1 id="prompt" class="glass prompt"></h1>
+
+  <div class="glass toolbar" role="toolbar" focusgroup="toolbar wrap" aria-label="Drawing tools" aria-controls="pad">
+    <div role="group" aria-label="Tool">
+      <button type="button" class="tool" data-tool="pen" aria-pressed="true" aria-label="Pen" title="Pen">
+        <svg aria-hidden="true"><use href="icons.svg#pen"/></svg>
+      </button>
+      <button type="button" class="tool" data-tool="eraser" aria-pressed="false" aria-label="Eraser" title="Eraser">
+        <svg aria-hidden="true"><use href="icons.svg#eraser"/></svg>
+      </button>
+    </div>
+
+    <span role="separator" aria-orientation="vertical"></span>
+
+    <div role="group" aria-label="Color">
+      <button type="button" class="swatch" data-color="#1d1d1f" style="--swatch:#1d1d1f" aria-pressed="true" aria-label="Black" title="Black"></button>
+      <button type="button" class="swatch" data-color="#007aff" style="--swatch:#007aff" aria-pressed="false" aria-label="Blue" title="Blue"></button>
+      <button type="button" class="swatch" data-color="#ff3b30" style="--swatch:#ff3b30" aria-pressed="false" aria-label="Red" title="Red"></button>
+      <button type="button" class="swatch" data-color="#34c759" style="--swatch:#34c759" aria-pressed="false" aria-label="Green" title="Green"></button>
+      <button type="button" class="swatch" data-color="#ff9500" style="--swatch:#ff9500" aria-pressed="false" aria-label="Orange" title="Orange"></button>
+      <button type="button" class="swatch" data-color="#af52de" style="--swatch:#af52de" aria-pressed="false" aria-label="Purple" title="Purple"></button>
+      <input type="color" id="custom-color" value="#5856d6" aria-label="Custom color" title="Custom color">
+    </div>
+
+    <span role="separator" aria-orientation="vertical"></span>
+
+    <div role="group" aria-label="Stroke width">
+      <button type="button" class="size" data-size="2" style="--dot:4px" aria-pressed="false" aria-label="Thin" title="Thin"></button>
+      <button type="button" class="size" data-size="5" style="--dot:8px" aria-pressed="true" aria-label="Medium" title="Medium"></button>
+      <button type="button" class="size" data-size="10" style="--dot:13px" aria-pressed="false" aria-label="Thick" title="Thick"></button>
+    </div>
+
+    <span role="separator" aria-orientation="vertical"></span>
+
+    <div role="group" aria-label="Edit">
+      <button type="button" id="undo" aria-label="Undo" title="Undo (⌘Z)">
+        <svg aria-hidden="true"><use href="icons.svg#undo"/></svg>
+      </button>
+      <button type="button" id="clear" aria-label="Clear" title="Clear">
+        <svg aria-hidden="true"><use href="icons.svg#trash"/></svg>
+      </button>
+    </div>
+
+    <span role="separator" aria-orientation="vertical"></span>
+
+    <div role="group" aria-label="Finish">
+      <button type="button" id="cancel" class="text">Cancel</button>
+      <button type="button" id="done" class="text done">
+        <svg aria-hidden="true"><use href="icons.svg#check"/></svg>Done
+      </button>
+    </div>
   </div>
-  <script>
-    const canvas = document.getElementById('pad');
-    const ctx = canvas.getContext('2d', { willReadFrequently: true });
-    const MARGIN = 20;
 
-    // Grow the canvas to cover the window, keeping what's drawn. Never shrink, so a smaller window can't cut the drawing.
-    function fit() {
-      const w = Math.max(canvas.width, innerWidth), h = Math.max(canvas.height, innerHeight);
-      if (w === canvas.width && h === canvas.height) return;
-      const old = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      canvas.width = w; canvas.height = h;  // resizing clears the canvas
-      ctx.fillStyle = "#ffffff";
-      ctx.fillRect(0, 0, w, h);
-      ctx.putImageData(old, 0, 0);
-    }
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    fit();
-    window.onresize = fit;
-
-    fetch('/prompt').then(r => r.json()).then(p => { document.getElementById('prompt').textContent = p; });
-
-    let drawing = false, erasing = false;
-    const history = [];
-    const snapshot = () => { history.push(ctx.getImageData(0, 0, canvas.width, canvas.height)); if (history.length > 50) history.shift(); };
-    canvas.onpointerdown = (e) => { snapshot(); drawing = true; canvas.setPointerCapture(e.pointerId); ctx.beginPath(); ctx.moveTo(e.offsetX, e.offsetY); };
-    canvas.onpointermove = (e) => {
-      if (!drawing) return;
-      ctx.strokeStyle = erasing ? '#ffffff' : document.getElementById('color').value;
-      ctx.lineWidth = erasing ? document.getElementById('size').value * 4 : document.getElementById('size').value;
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-      ctx.lineTo(e.offsetX, e.offsetY);
-      ctx.stroke();
-    };
-    canvas.onpointerup = canvas.onpointercancel = () => { drawing = false; };
-
-    // Fill first: a snapshot taken before a resize is smaller than the canvas.
-    const undo = () => {
-      if (!history.length) return;
-      ctx.fillStyle = "#ffffff";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.putImageData(history.pop(), 0, 0);
-    };
-    document.getElementById('undo').onclick = undo;
-    window.onkeydown = (e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'z') { e.preventDefault(); undo(); } };
-    const eraserBtn = document.getElementById('eraser');
-    eraserBtn.onclick = () => { erasing = !erasing; eraserBtn.setAttribute('aria-pressed', erasing); };
-
-    document.getElementById('clear').onclick = () => {
-      snapshot();
-      ctx.fillStyle = "#ffffff";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-    };
-
-    document.getElementById('cancel').onclick = async () => {
-      await fetch('/cancel', { method: 'POST' });
-      document.body.innerHTML = "<h2>Cancelled. You can close this tab.</h2>";
-      window.close();
-    };
-
-    // Crop to the bounding box of everything that isn't white, plus MARGIN on every side.
-    // Scans pixels rather than tracking strokes, so eraser, undo and clear are all accounted for.
-    function cropped() {
-      const w = canvas.width, h = canvas.height;
-      const px = new Uint32Array(ctx.getImageData(0, 0, w, h).data.buffer);
-      let x0 = w, y0 = h, x1 = -1, y1 = -1;
-      for (let y = 0; y < h; y++) {
-        for (let x = 0; x < w; x++) {
-          if (px[y * w + x] !== 0xffffffff) {  // canvas is opaque, so white is the only all-255 pixel
-            if (x < x0) x0 = x;
-            if (x > x1) x1 = x;
-            if (y < y0) y0 = y;
-            if (y > y1) y1 = y;
-          }
-        }
-      }
-      if (x1 < 0) return canvas;  // nothing drawn: send the blank canvas as is
-      const cw = x1 - x0 + 1, ch = y1 - y0 + 1;
-      const out = document.createElement('canvas');
-      out.width = cw + 2 * MARGIN;
-      out.height = ch + 2 * MARGIN;
-      const o = out.getContext('2d');
-      o.fillStyle = "#ffffff";
-      o.fillRect(0, 0, out.width, out.height);
-      o.drawImage(canvas, x0, y0, cw, ch, MARGIN, MARGIN, cw, ch);
-      return out;
-    }
-
-    async function submitAndClose() {
-      const dataUrl = cropped().toDataURL('image/png');
-      await fetch('/save', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image: dataUrl })
-      });
-      document.body.innerHTML = "<h2>Saved! You can close this tab.</h2>";
-      window.close();
-    }
-
-    document.getElementById('done').onclick = submitAndClose;
-  </script>
+  <div id="status" class="status" role="status"></div>
 </body>
 </html>

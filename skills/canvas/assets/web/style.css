@@ -1,0 +1,264 @@
+/* Canvas page: white "paper" filling the window, with translucent glass controls floating over it. */
+
+:root {
+  color-scheme: light dark;
+  --accent: #007aff;
+  --on-accent: #fff;
+  --label: #1d1d1f;
+  --secondary-label: rgb(60 60 67 / 0.75);
+  --glass: rgb(250 250 252 / 0.72);
+  --glass-solid: #f5f5f7;
+  --glass-edge: rgb(255 255 255 / 0.8);
+  --glass-rim: rgb(0 0 0 / 0.08);
+  --fill-hover: rgb(0 0 0 / 0.06);
+  --fill-active: rgb(0 0 0 / 0.1);
+  --separator: rgb(60 60 67 / 0.25);
+  --swatch-rim: rgb(0 0 0 / 0.45);
+  --window: #ececf0;
+  --shadow: 0 10px 30px rgb(0 0 0 / 0.14), 0 1px 3px rgb(0 0 0 / 0.1);
+
+  @media (prefers-color-scheme: dark) {
+    --accent: #0a84ff;
+    --label: #f5f5f7;
+    --secondary-label: rgb(235 235 245 / 0.7);
+    --glass: rgb(44 44 46 / 0.78);
+    --glass-solid: #2c2c2e;
+    --glass-edge: rgb(255 255 255 / 0.14);
+    --glass-rim: rgb(0 0 0 / 0.5);
+    --fill-hover: rgb(255 255 255 / 0.1);
+    --fill-active: rgb(255 255 255 / 0.16);
+    --separator: rgb(235 235 245 / 0.22);
+    --swatch-rim: rgb(255 255 255 / 0.6);
+    --window: #1c1c1e;
+    --shadow: 0 10px 30px rgb(0 0 0 / 0.35), 0 1px 3px rgb(0 0 0 / 0.3);
+  }
+
+  accent-color: var(--accent);
+}
+
+html, body { margin: 0; height: 100%; overflow: hidden; }
+
+body {
+  display: grid;
+  place-items: center;
+  background: var(--window);
+  color: var(--label);
+  font: 500 13px/1.3 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* No CSS size: 1 canvas pixel = 1 CSS pixel, so pointer offsets map directly. */
+canvas { position: fixed; inset: 0 auto auto 0; display: block; cursor: crosshair; touch-action: none; }
+canvas[data-tool="eraser"] { cursor: none; }
+
+/* Eraser preview. Paper is always white, so fixed colors work in light and dark mode;
+   the white outer ring keeps the edge visible over dark ink. */
+.eraser-cursor {
+  position: fixed;
+  top: 0;
+  left: 0;
+  box-sizing: border-box;
+  border: 1px solid rgb(0 0 0 / 0.55);
+  border-radius: 50%;
+  background: rgb(0 0 0 / 0.08);
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 0.8);
+  pointer-events: none;
+}
+.eraser-cursor[hidden] { display: none; }
+
+/* ---------- Glass surfaces ---------- */
+
+.glass {
+  position: fixed;
+  left: 0;
+  right: 0;
+  margin-inline: auto;
+  width: fit-content;
+  max-width: calc(100% - 24px);
+  box-sizing: border-box;
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  backdrop-filter: blur(24px) saturate(180%);
+  /* Transparent-ish border so the edge survives forced colors; inset highlight gives the glass rim. */
+  border: 1px solid var(--glass-rim);
+  box-shadow: inset 0 1px 0 var(--glass-edge), var(--shadow);
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .glass { background: var(--glass-solid); -webkit-backdrop-filter: none; backdrop-filter: none; }
+}
+
+.prompt {
+  top: 16px;
+  margin-block: 0;
+  padding: 8px 18px;
+  border-radius: 999px;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  text-align: center;
+}
+.prompt:empty { display: none; }
+
+/* ---------- Toolbar ---------- */
+
+.toolbar {
+  bottom: 20px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 6px;
+  padding: 6px;
+  border-radius: 26px;
+}
+
+.toolbar [role="group"] { display: flex; align-items: center; gap: 2px; }
+.toolbar [role="separator"] { align-self: stretch; margin: 6px 4px; border-inline-start: 1px solid var(--separator); }
+
+.toolbar button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-inline-size: 36px;
+  min-block-size: 36px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--label);
+  font: inherit;
+  cursor: pointer;
+}
+.toolbar button svg { width: 20px; height: 20px; flex: none; pointer-events: none; }
+
+@media (hover: hover) {
+  .toolbar button:hover { background: var(--fill-hover); }
+}
+.toolbar button:active { background: var(--fill-active); }
+
+/* Pressed state comes from aria-pressed, so what's shown and what's announced can't diverge. */
+.toolbar .tool[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
+
+/* Color swatches: a ring appears around the selected one. */
+.toolbar .swatch {
+  --ring: transparent;
+  min-inline-size: 30px;
+  min-block-size: 30px;
+  padding: 0;
+  box-shadow: 0 0 0 2px var(--ring);
+}
+.toolbar .swatch::before {
+  content: "";
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--swatch);
+  box-shadow: inset 0 0 0 1px var(--swatch-rim);
+  forced-color-adjust: none; /* keep the real colors in forced-colors mode */
+}
+.toolbar .swatch[aria-pressed="true"] { --ring: var(--label); }
+
+/* Custom color well: native color input dressed as a rainbow-ringed swatch. */
+.toolbar input[type="color"] {
+  width: 30px;
+  height: 30px;
+  padding: 4px;
+  margin: 0 2px;
+  border: none;
+  border-radius: 50%;
+  background: conic-gradient(#ff3b30, #ff9500, #ffcc00, #34c759, #00c7be, #007aff, #af52de, #ff2d55, #ff3b30);
+  cursor: pointer;
+  box-shadow: 0 0 0 2px transparent;
+  forced-color-adjust: none;
+}
+.toolbar input[type="color"].active { box-shadow: 0 0 0 2px var(--label); }
+.toolbar input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+.toolbar input[type="color"]::-webkit-color-swatch { border: 2px solid var(--glass-solid); border-radius: 50%; }
+.toolbar input[type="color"]::-moz-color-swatch { border: 2px solid var(--glass-solid); border-radius: 50%; }
+
+/* Stroke sizes: a dot that grows with the width. */
+.toolbar .size::before {
+  content: "";
+  width: var(--dot);
+  height: var(--dot);
+  border-radius: 50%;
+  background: currentColor;
+  forced-color-adjust: none; /* forced colors would otherwise blank the background; currentColor still follows the system text color */
+}
+.toolbar .size[aria-pressed="true"] { background: var(--fill-active); box-shadow: inset 0 0 0 1.5px var(--label); }
+
+.toolbar .text { padding: 0 14px; font-weight: 600; }
+.toolbar .done { background: var(--accent); color: var(--on-accent); padding-inline: 14px 16px; }
+@media (hover: hover) {
+  .toolbar .done:hover { background: color-mix(in srgb, var(--accent) 88%, black); }
+}
+
+:where(.toolbar button, .toolbar input):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+@media (pointer: coarse) {
+  .toolbar button { min-inline-size: 44px; min-block-size: 44px; }
+  .toolbar .swatch, .toolbar input[type="color"] { min-inline-size: 40px; min-block-size: 40px; }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .toolbar button, .toolbar input[type="color"] { transition: background-color 150ms ease, box-shadow 150ms ease, scale 120ms ease; }
+  .toolbar button:active { scale: 0.94; }
+}
+
+@media (forced-colors: active) {
+  /* Not on text buttons: forced colors draws a Canvas backplate behind text, which hides it on a Highlight fill. */
+  .toolbar .tool[aria-pressed="true"] { background: Highlight; color: HighlightText; forced-color-adjust: none; }
+  .toolbar .swatch[aria-pressed="true"], .toolbar input[type="color"].active { outline: 2px solid Highlight; }
+  .toolbar .size[aria-pressed="true"] { outline: 2px solid Highlight; }
+}
+
+/* ---------- Tooltips (upgraded from title where interest invokers exist) ---------- */
+
+[popover="hint"] {
+  inset: auto;
+  position-area: block-start;
+  position-try-fallbacks: flip-block;
+  margin: 8px;
+  padding: 4px 9px;
+  border: 1px solid var(--glass-rim);
+  border-radius: 8px;
+  background: var(--glass-solid);
+  color: var(--label);
+  font: 500 12px/1.3 system-ui, -apple-system, sans-serif;
+  box-shadow: var(--shadow);
+}
+
+/* ---------- Status ---------- */
+
+/* Always in the DOM so screen readers announce changes; only visible once it has content. */
+.status:not(:empty) {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  padding: 28px 40px;
+  border-radius: 22px;
+  background: var(--glass-solid);
+  border: 1px solid var(--glass-rim);
+  box-shadow: inset 0 1px 0 var(--glass-edge), var(--shadow);
+  text-align: center;
+}
+.status svg { width: 44px; height: 44px; padding: 8px; box-sizing: border-box; border-radius: 50%; background: var(--accent); color: var(--on-accent); }
+.status.cancelled svg { background: var(--secondary-label); }
+.status strong { font-size: 17px; font-weight: 600; }
+.status span { color: var(--secondary-label); }
+
+/* Error toast above the toolbar (status reused while the canvas is still up). */
+body:not(.finished) .status:not(:empty) {
+  position: fixed;
+  bottom: 90px;
+  left: 0;
+  right: 0;
+  margin-inline: auto;
+  width: fit-content;
+  padding: 10px 16px;
+  border-radius: 999px;
+}
+
+body.finished :is(canvas, .prompt, .toolbar, .eraser-cursor) { display: none; }
